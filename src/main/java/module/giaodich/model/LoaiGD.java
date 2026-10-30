@@ -4,15 +4,16 @@ package module.giaodich.model;
 public final class LoaiGD {
     public static final String NAP        = "NAP";
     public static final String RUT        = "RUT";
-    public static final String CHUYEN_DI  = "CHUYEN_DI";     // dành cho module Chuyển khoản (đợt 2)
-    public static final String CHUYEN_DEN = "CHUYEN_DEN";
+    public static final String CHUYEN_DI  = "CHUYEN_DI";     // chuyển khoản: bên gửi
+    public static final String CHUYEN_DEN = "CHUYEN_DEN";    // chuyển khoản: bên nhận
+    public static final String PHI        = "PHI";           // phí chuyển khoản (trừ tiền bên gửi)
     public static final String HOAN_NAP   = "HOAN_NAP";      // đảo một giao dịch nạp (trừ tiền)
     public static final String HOAN_RUT   = "HOAN_RUT";      // đảo một giao dịch rút (cộng tiền)
 
     /** Dùng cho ô lọc: vị trí 0 = "Tất cả" (mã null). Hai mảng cùng thứ tự. */
-    public static final String[] MA = { null, NAP, RUT, CHUYEN_DI, CHUYEN_DEN, HOAN_NAP, HOAN_RUT };
+    public static final String[] MA = { null, NAP, RUT, CHUYEN_DI, CHUYEN_DEN, PHI, HOAN_NAP, HOAN_RUT };
     public static final String[] TEN = { "Tất cả", "Nạp tiền", "Rút tiền", "Chuyển đi",
-                                         "Chuyển đến", "Hoàn nạp", "Hoàn rút" };
+                                         "Chuyển đến", "Phí", "Hoàn nạp", "Hoàn rút" };
 
     private LoaiGD() {}
 

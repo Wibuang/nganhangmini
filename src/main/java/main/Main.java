@@ -7,6 +7,11 @@ import java.util.Arrays;
 import java.util.List;
 import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
+import module.baocao.BaoCaoModule;
+import module.cauhinh.CauHinhModule;
+import module.cauhinh.controller.CauHinhController;
+import module.cauhinh.model.KhoaThamSo;
+import module.chuyenkhoan.ChuyenKhoanModule;
 import module.giaodich.GiaoDichModule;
 import module.khachhang.KhachHangModule;
 import module.taikhoan.TaiKhoanModule;
@@ -21,11 +26,13 @@ public class Main {
 
     /** Thứ tự ở đây là thứ tự các tab trên cửa sổ chính. */
     private static final List<IModule> CAC_MODULE = Arrays.asList(
-            new KhachHangModule(),
-            new TaiKhoanModule(),
-            new GiaoDichModule(),
-            new XacThucModule());
-
+             new KhachHangModule(),
+             new TaiKhoanModule(),
+             new GiaoDichModule(),
+             new ChuyenKhoanModule(),
+             new BaoCaoModule(),
+             new CauHinhModule(),
+             new XacThucModule());
     public static void main(String[] args) {
         try {
             for (UIManager.LookAndFeelInfo info : UIManager.getInstalledLookAndFeels()) {
@@ -45,6 +52,9 @@ public class Main {
     }
 
     private static void moCuaSoChinh(PhienDangNhap phien) {
-        new frmChinh(phien, CAC_MODULE, Main::moDangNhap).setVisible(true);
+        // Thời gian hết phiên do quản trị viên cấu hình; đọc một lần mỗi lần đăng nhập
+        int phutHetPhien = (int) new CauHinhController(PhienDangNhap.heThong())
+                .laySo(KhoaThamSo.THOI_GIAN_HET_PHIEN_PHUT);
+        new frmChinh(phien, CAC_MODULE, Main::moDangNhap, phutHetPhien).setVisible(true);
     }
 }

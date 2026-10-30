@@ -16,11 +16,12 @@ public class GiaoDich {
     private final String ghiChu;
     private final String soTKDoiTac;        // tài khoản bên kia (chỉ có khi chuyển khoản)
     private final Integer maGDGoc;          // giao dịch gốc nếu đây là giao dịch đảo
+    private final Integer maNhom;           // chuyển khoản: dòng CHUYEN_DI của cùng lần chuyển (PHI, CHUYEN_DEN trỏ về)
     private final Integer maND;             // người thực hiện
 
     public GiaoDich(int maGD, String maThamChieu, int maTK, String soTaiKhoan, String loaiGD,
                     long soTien, long soDuSau, LocalDateTime ngayGD, String kenh, String ghiChu,
-                    String soTKDoiTac, Integer maGDGoc, Integer maND) {
+                    String soTKDoiTac, Integer maGDGoc, Integer maNhom, Integer maND) {
         this.maGD = maGD;
         this.maThamChieu = maThamChieu;
         this.maTK = maTK;
@@ -33,6 +34,7 @@ public class GiaoDich {
         this.ghiChu = ghiChu;
         this.soTKDoiTac = soTKDoiTac;
         this.maGDGoc = maGDGoc;
+        this.maNhom = maNhom;
         this.maND = maND;
     }
 
@@ -48,5 +50,6 @@ public class GiaoDich {
     public String getGhiChu() { return ghiChu; }
     public String getSoTKDoiTac() { return soTKDoiTac; }
     public Integer getMaGDGoc() { return maGDGoc; }
+    public Integer getMaNhom() { return maNhom; }
     public Integer getMaND() { return maND; }
 }

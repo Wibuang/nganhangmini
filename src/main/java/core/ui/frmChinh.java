@@ -2,7 +2,11 @@ package core.ui;
 
 import core.phien.PhienDangNhap;
 import core.phien.VaiTro;
+import java.awt.AWTEvent;
 import java.awt.BorderLayout;
+import java.awt.Component;
+import java.awt.Toolkit;
+import java.awt.event.AWTEventListener;
 import java.util.List;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
@@ -10,14 +14,21 @@ import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JTabbedPane;
+import javax.swing.Timer;
 
 /**
  * Cửa sổ chính: thanh tiêu đề (tên + vai trò + Đăng xuất) và mỗi module một tab.
  * Chỉ hiện các module mà vai trò của người đăng nhập được phép dùng.
+ * Tự đăng xuất khi không thao tác quá phutHetPhien phút (0 = không tự đăng xuất).
  */
 public class frmChinh extends JFrame {
+    private static final int CHU_KY_KIEM_TRA_MS = 5000;
 
-    public frmChinh(PhienDangNhap phien, List<IModule> dsModule, Runnable khiDangXuat) {
+    private final AWTEventListener langNgheThaoTac;      // null nếu không dùng hết phiên
+    private final Timer dongHoKiemTra;
+    private volatile long lanThaoTacCuoi = System.currentTimeMillis();
+
+    public frmChinh(PhienDangNhap phien, List<IModule> dsModule, Runnable khiDangXuat, int phutHetPhien) {
         setTitle("Ngân hàng mini - " + phien.getTenHienThi());
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
 
@@ -28,7 +39,7 @@ public class frmChinh extends JFrame {
             }
         }
         tabs.addChangeListener(e -> {          // chuyển module thì tải lại dữ liệu của module đó
-            java.awt.Component c = tabs.getSelectedComponent();
+            Component c = tabs.getSelectedComponent();
             if (c instanceof CoTheLamMoi) {
                 ((CoTheLamMoi) c).lamMoi();
             }
@@ -52,7 +63,42 @@ public class frmChinh extends JFrame {
         pnlChinh.add(tabs, BorderLayout.CENTER);
         setContentPane(pnlChinh);
 
-        setSize(1050, 640);
+        setSize(1150, 660);
         setLocationRelativeTo(null);
+
+        // ----- tự đăng xuất khi không thao tác -----
+        if (phutHetPhien > 0) {
+            langNgheThaoTac = ev -> lanThaoTacCuoi = System.currentTimeMillis();
+            Toolkit.getDefaultToolkit().addAWTEventListener(langNgheThaoTac,
+                    AWTEvent.MOUSE_EVENT_MASK | AWTEvent.MOUSE_MOTION_EVENT_MASK | AWTEvent.KEY_EVENT_MASK);
+            dongHoKiemTra = new Timer(CHU_KY_KIEM_TRA_MS, e -> {
+                if (System.currentTimeMillis() - lanThaoTacCuoi > phutHetPhien * 60_000L) {
+                    hetPhien(khiDangXuat, phutHetPhien);
+                }
+            });
+            dongHoKiemTra.start();
+        } else {
+            langNgheThaoTac = null;
+            dongHoKiemTra = null;
+        }
+    }
+
+    private void hetPhien(Runnable khiDangXuat, int phut) {
+        dispose();                                  // đóng cửa sổ chính (và mọi hộp thoại đang mở)
+        khiDangXuat.run();                          // quay về màn hình đăng nhập
+        UI.thongBao(null, "Phiên làm việc đã kết thúc vì bạn không thao tác trong " + phut
+                + " phút. Vui lòng đăng nhập lại.");
+    }
+
+    /** Dừng bộ đếm hết phiên khi cửa sổ đóng, tránh chạy ngầm sau khi đã đăng xuất. */
+    @Override
+    public void dispose() {
+        if (dongHoKiemTra != null) {
+            dongHoKiemTra.stop();
+        }
+        if (langNgheThaoTac != null) {
+            Toolkit.getDefaultToolkit().removeAWTEventListener(langNgheThaoTac);
+        }
+        super.dispose();
     }
 }

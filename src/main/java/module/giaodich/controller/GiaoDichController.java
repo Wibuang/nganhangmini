@@ -7,6 +7,10 @@ import java.io.File;
 import java.io.IOException;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import module.baocao.controller.NhatKyController;
+import module.baocao.controller.ThongBaoController;
+import module.cauhinh.controller.CauHinhController;
+import module.cauhinh.model.KhoaThamSo;
 import module.giaodich.dao.GiaoDichDAO;
 import module.giaodich.model.GiaoDich;
 import module.giaodich.model.KenhGD;
@@ -16,23 +20,28 @@ import module.taikhoan.controller.TaiKhoanController;
 import module.taikhoan.model.TaiKhoan;
 
 /**
- * Module Giao dịch & Sổ cái. MỌI thay đổi số dư của hệ thống phải đi qua module này.
- * (Các module sau như Chuyển khoản, Tiết kiệm, Khoản vay sẽ gọi vào đây để ghi sổ.)
+ * Module Giao dịch & Sổ cái. MỌI thay đổi số dư của hệ thống phải đi qua module này
+ * (module Chuyển khoản gọi chuyenNoiBo(...) để ghi sổ).
+ * Mỗi giao dịch thành công đều gửi thông báo biến động số dư cho chủ tài khoản.
  * Khách hàng chỉ thao tác được trên tài khoản của chính mình.
  */
 public class GiaoDichController {
-    private static final long TOI_DA_QUAY = 500_000_000L;
-    private static final long TOI_DA_UNG_DUNG = 50_000_000L;
-    private static final int  TOI_DA_LICH_SU = 500;
-    private static final int  TOI_DA_SAO_KE = 5000;
+    private static final int TOI_DA_LICH_SU = 500;
+    private static final int TOI_DA_SAO_KE = 5000;
 
     private final PhienDangNhap phien;
     private final GiaoDichDAO dao = new GiaoDichDAO();
     private final TaiKhoanController taiKhoanController;
+    private final CauHinhController cauHinh;
+    private final NhatKyController nhatKy;
+    private final ThongBaoController thongBao;
 
     public GiaoDichController(PhienDangNhap phien) {
         this.phien = phien;
         this.taiKhoanController = new TaiKhoanController(phien);
+        this.cauHinh = new CauHinhController(phien);
+        this.nhatKy = new NhatKyController(phien);
+        this.thongBao = new ThongBaoController(phien);
     }
 
     // ================================================================ nạp / rút
@@ -60,7 +69,7 @@ public class GiaoDichController {
         if (!phien.laKhach()) {
             throw new IllegalStateException("Chức năng này chỉ dành cho khách hàng.");
         }
-        long soTien = kiemTraSoTien(soTienText, TOI_DA_UNG_DUNG);
+        long soTien = kiemTraSoTien(soTienText, cauHinh.laySo(KhoaThamSo.HAN_MUC_NAP_RUT_UNG_DUNG));
         TaiKhoan tk = taiKhoanController.layTheoMa(maTK);      // kiểm tra tài khoản này là của khách
         return thucHien(tk, loai, soTien, KenhGD.UNG_DUNG, ghiChu);
     }
@@ -70,7 +79,7 @@ public class GiaoDichController {
         if (!phien.laNhanVien()) {
             throw new IllegalStateException("Chỉ nhân viên ngân hàng mới giao dịch tại quầy.");
         }
-        long soTien = kiemTraSoTien(soTienText, TOI_DA_QUAY);
+        long soTien = kiemTraSoTien(soTienText, cauHinh.laySo(KhoaThamSo.HAN_MUC_NAP_RUT_QUAY));
         String nd = ghiChu.trim();
         if (nd.length() > 150) {
             throw new IllegalArgumentException("Ghi chú tối đa 150 ký tự.");
@@ -97,8 +106,10 @@ public class GiaoDichController {
                     "Tài khoản đang ở trạng thái không cho phép giao dịch (đóng băng hoặc đã đóng).");
         }
         long kq = dao.ghiSo(tk.getMaTK(), tk.getSoTaiKhoan(), loai, soTien, kenh, ghiChu,
-                phien.getMaND(), null);
-        return xuLyKetQua(kq, "Số dư không đủ để rút.");
+                maNguoiThucHien(), null);
+        GiaoDich g = xuLyKetQua(kq, "Số dư không đủ để rút.");
+        guiThongBaoBienDong(tk.getMaKH(), g, 0, null);
+        return g;
     }
 
     private GiaoDich xuLyKetQua(long ketQua, String thongBaoKhongDuTien) {
@@ -109,6 +120,59 @@ public class GiaoDichController {
             throw new IllegalStateException("Giao dịch thất bại, vui lòng thử lại.");
         }
         return dao.timTheoMa((int) ketQua);
+    }
+
+    // ================================================================ chuyển khoản (cho module Chuyển khoản)
+    /**
+     * Ghi sổ một lần chuyển khoản nội bộ: trừ (soTien + phi) của tài khoản gửi, cộng soTien cho tài khoản nhận.
+     * Module Chuyển khoản đã kiểm tra hạn mức, OTP, người nhận; module này kiểm tra quyền sở hữu
+     * tài khoản gửi, trạng thái và số dư, rồi ghi sổ nguyên tử. Trả về dòng CHUYEN_DI của bên gửi.
+     */
+    public GiaoDich chuyenNoiBo(TaiKhoan gui, TaiKhoan nhan, long soTien, long phi,
+                                String noiDung, String kenh) {
+        if (soTien <= 0) {
+            throw new IllegalArgumentException("Số tiền phải lớn hơn 0.");
+        }
+        if (phi < 0) {
+            throw new IllegalArgumentException("Phí không hợp lệ.");
+        }
+        if (gui.getMaTK() == nhan.getMaTK()) {
+            throw new IllegalArgumentException("Tài khoản gửi và tài khoản nhận phải khác nhau.");
+        }
+        if (!(phien.laKhach() || phien.laNhanVien() || phien.laHeThong())) {
+            throw new IllegalStateException("Bạn không có quyền chuyển khoản.");
+        }
+        TaiKhoan guiMoi = taiKhoanController.layTheoMa(gui.getMaTK());   // kiểm tra quyền sở hữu + số dư mới nhất
+        if (!guiMoi.dangHoatDong()) {
+            throw new IllegalArgumentException("Tài khoản gửi đang không hoạt động.");
+        }
+        long kq = dao.chuyenKhoan(guiMoi.getMaTK(), guiMoi.getSoTaiKhoan(), nhan.getMaTK(),
+                nhan.getSoTaiKhoan(), soTien, phi, noiDung, kenh, maNguoiThucHien());
+        if (kq == GiaoDichDAO.KHONG_DU_SO_DU) {
+            throw new IllegalArgumentException("Số dư không đủ để chuyển khoản (cần "
+                    + DinhDang.tien(soTien + phi) + " VND gồm phí " + DinhDang.tien(phi) + " VND).");
+        }
+        if (kq <= 0) {
+            throw new IllegalStateException(
+                    "Chuyển khoản thất bại, vui lòng thử lại (tài khoản nhận có thể vừa bị khóa).");
+        }
+        GiaoDich di = dao.timTheoMa((int) kq);
+        guiThongBaoBienDong(guiMoi.getMaKH(), di, phi, nhan.getSoTaiKhoan());           // bên gửi
+        guiThongBaoBienDong(nhan.getMaKH(), nguoiNhanLaDong(di), 0, guiMoi.getSoTaiKhoan()); // bên nhận
+        return di;
+    }
+
+    /** Dựng dòng "chuyển đến" tương ứng của bên nhận (chỉ để soạn thông báo, không lưu). */
+    private GiaoDich nguoiNhanLaDong(GiaoDich di) {
+        return new GiaoDich(di.getMaGD(), di.getMaThamChieu(), 0, di.getSoTKDoiTac(), LoaiGD.CHUYEN_DEN,
+                di.getSoTien(), 0, di.getNgayGD(), di.getKenh(), di.getGhiChu(), di.getSoTaiKhoan(),
+                null, null, di.getMaND());
+    }
+
+    /** Tổng tiền tài khoản đã chuyển đi hôm nay (để module Chuyển khoản kiểm tra hạn mức ngày). */
+    public long tongChuyenDiHomNay(int maTK) {
+        TaiKhoan tk = taiKhoanController.layTheoMa(maTK);      // đã kiểm tra quyền
+        return dao.tongChuyenDiTrongNgay(tk.getMaTK(), LocalDate.now());
     }
 
     // ================================================================ đảo giao dịch
@@ -145,8 +209,12 @@ public class GiaoDichController {
         }
         long kq = dao.ghiSo(tk.getMaTK(), tk.getSoTaiKhoan(),
                 daoNap ? LoaiGD.HOAN_NAP : LoaiGD.HOAN_RUT, goc.getSoTien(), KenhGD.HE_THONG,
-                ghiChu, phien.getMaND(), goc.getMaGD());
-        return xuLyKetQua(kq, "Số dư tài khoản không đủ để đảo giao dịch nạp tiền này.");
+                ghiChu, maNguoiThucHien(), goc.getMaGD());
+        GiaoDich moi = xuLyKetQua(kq, "Số dư tài khoản không đủ để đảo giao dịch nạp tiền này.");
+        nhatKy.ghi("DAO_GIAO_DICH", goc.getMaThamChieu(),
+                "Đảo bằng " + moi.getMaThamChieu() + ". Lý do: " + lyDo.trim());
+        guiThongBaoBienDong(tk.getMaKH(), moi, 0, null);
+        return moi;
     }
 
     // ================================================================ lịch sử, sao kê
@@ -237,5 +305,34 @@ public class GiaoDichController {
         } catch (IOException ex) {
             throw new IllegalStateException("Không ghi được file: " + ex.getMessage());
         }
+    }
+
+    // ================================================================ nội bộ
+    /** Mã người thực hiện để ghi vào sổ cái; phiên hệ thống thì để trống (null). */
+    private Integer maNguoiThucHien() {
+        return phien.getMaND() > 0 ? phien.getMaND() : null;
+    }
+
+    /**
+     * Gửi thông báo biến động số dư cho chủ tài khoản. phi > 0 chỉ có ở bên gửi chuyển khoản.
+     * doiTac: số tài khoản bên kia (chuyển khoản). Số dư hiện tại chỉ hiện cho giao dịch của chính tài khoản đó.
+     */
+    private void guiThongBaoBienDong(int maKH, GiaoDich g, long phi, String doiTac) {
+        String dau = LoaiGD.laTienVao(g.getLoaiGD()) ? "+" : "-";
+        StringBuilder nd = new StringBuilder();
+        nd.append("TK ").append(g.getSoTaiKhoan()).append(": ").append(dau)
+          .append(DinhDang.tien(g.getSoTien())).append(" VND (").append(LoaiGD.tenHienThi(g.getLoaiGD()));
+        if (doiTac != null) {
+            nd.append(LoaiGD.CHUYEN_DEN.equals(g.getLoaiGD()) ? " từ " : " tới ").append(doiTac);
+        }
+        nd.append(")");
+        if (phi > 0) {
+            nd.append(", phí ").append(DinhDang.tien(phi)).append(" VND");
+        }
+        if (!LoaiGD.CHUYEN_DEN.equals(g.getLoaiGD())) {
+            nd.append(". Số dư: ").append(DinhDang.tien(g.getSoDuSau() - phi)).append(" VND");
+        }
+        nd.append(". Mã GD: ").append(g.getMaThamChieu()).append(".");
+        thongBao.guiChoKhach(maKH, "Biến động số dư", nd.toString());
     }
 }
