@@ -1,0 +1,198 @@
+# NganHangMini v3 – đợt 1 + 2: 7 trong 10 module
+
+Phần mềm quản lý tài khoản ngân hàng (Java Swing + SQL Server), **chia theo module nghiệp vụ**.
+Mỗi module là một ứng dụng MVC thu nhỏ (`model` / `dao` / `controller` / `view`).
+
+| # | Module | Gói | Đợt |
+|---|---|---|---|
+| 1 | Xác thực & Phân quyền | `module.xacthuc` | 1 (+ OTP ở đợt 2) |
+| 2 | Khách hàng (KYC) | `module.khachhang` | 1 |
+| 3 | Tài khoản | `module.taikhoan` | 1 |
+| 4 | Giao dịch & Sổ cái | `module.giaodich` | 1 (+ chuyển khoản có phí ở đợt 2) |
+| 5 | **Chuyển khoản** | `module.chuyenkhoan` | **2** |
+| 9 | **Cấu hình** | `module.cauhinh` | **2** |
+| 10 | **Báo cáo, Nhật ký & Thông báo** | `module.baocao` | **2** |
+| 6 · 7 · 8 | Tiết kiệm · Khoản vay · Thẻ | | 3 – 4 (chưa làm) |
+
+## 1. Bố cục package
+
+```
+src/
+├── core/                       dùng chung, KHÔNG phụ thuộc module nào
+│   ├── database/   MyConnection
+│   ├── util/       DinhDang, MatKhauUtil, CsvUtil
+│   ├── phien/      PhienDangNhap, VaiTro
+│   └── ui/         IModule, frmChinh (có tự đăng xuất khi hết phiên), pnlNhieuTab, UI
+├── module/
+│   ├── xacthuc/     đăng nhập, khóa sau N lần sai, đổi mật khẩu, quản lý người dùng, OTP
+│   ├── khachhang/   hồ sơ, xác minh KYC
+│   ├── taikhoan/    mở / đóng băng / đóng tài khoản, tra cứu người nhận
+│   ├── giaodich/    SỔ CÁI: nạp, rút, chuyển (3 dòng), đảo, lịch sử, sao kê
+│   ├── chuyenkhoan/ hạn mức, phí, OTP, danh bạ, lệnh định kỳ
+│   ├── cauhinh/     tham số hệ thống, biểu phí, lãi suất
+│   └── baocao/      báo cáo, đối soát, nhật ký kiểm toán, thông báo
+│        (mỗi module có model/ dao/ controller/ view/ và 1 lớp XxxModule)
+└── main/           Main  (nơi DUY NHẤT biết tất cả module)
+```
+
+Ai gọi ai (mũi tên = "dùng"):
+
+```
+chuyenkhoan ──▶ giaodich (ghi sổ) ──▶ taikhoan ──▶ khachhang
+     │                │                   │            ▲
+     ├──▶ xacthuc (OTP)└──▶ cauhinh ◀─────┘            │
+     │                                      xacthuc ───┘
+     └──▶ cauhinh        MỌI module ──▶ baocao (ghi nhật ký, gửi thông báo)
+```
+
+## 2. Luật giữa các module
+
+1. **Gọi sang module khác chỉ qua Controller**, không gọi DAO, không đọc bảng của module khác.
+2. **Sổ cái là cổng duy nhất thay đổi tiền.** `GiaoDichDAO` là nơi DUY NHẤT được sửa `TaiKhoan.SoDu`;
+   cập nhật số dư + ghi sổ nằm trong cùng một giao dịch JDBC. Giao dịch đã ghi không sửa, không xóa;
+   sửa sai bằng giao dịch đảo. Module Chuyển khoản **không tự đổi số dư**, nó gọi `GiaoDichController.chuyenNoiBo`.
+3. **Kiểm tra dữ liệu người dùng nhập trước, rồi mới kiểm tra quyền / đọc CSDL.**
+4. **Phân quyền ở Controller**, không chỉ ở giao diện. Khách hàng chỉ thao tác được trên tài khoản của mình.
+5. **Hạn mức, phí, ngưỡng OTP không viết cứng**: luôn lấy qua `CauHinhController.laySo(...)`.
+6. **Nhật ký và thông báo không được làm hỏng nghiệp vụ**: lỗi khi ghi nhật ký / gửi thông báo chỉ in ra console.
+   Không bao giờ ghi mật khẩu hay OTP vào nhật ký.
+
+Hai ngoại lệ được chấp nhận và ghi rõ trong code: (a) `GiaoDichDAO` sửa cột `SoDu` của bảng `TaiKhoan`;
+(b) `BaoCaoDAO` chạy các truy vấn **chỉ đọc (SELECT)** ghép nhiều bảng để làm báo cáo.
+
+Thêm module mới: viết lớp cài `IModule` (3 hàm `ten`, `choPhep`, `taoManHinh`) rồi thêm vào `CAC_MODULE` trong `main/Main.java`.
+
+## 3. Chức năng đợt 2
+
+**Module 5 – Chuyển khoản** (khách hàng)
+- Chuyển khoản nội bộ: chọn tài khoản nguồn → nhập số tài khoản nhận (hoặc chọn từ danh bạ) → "Kiểm tra" hiện tên chủ tài khoản →
+  **xem trước** (người nhận, số tiền, phí, tổng bị trừ) → xác nhận → **OTP nếu số tiền lớn** → biên lai.
+- Một lần chuyển ghi sổ **3 dòng trong cùng một giao dịch**: `CHUYEN_DI` + `PHI` (bên gửi) và `CHUYEN_DEN` (bên nhận);
+  cập nhật tài khoản có mã nhỏ trước để hai người chuyển cho nhau cùng lúc không bị khóa chéo (deadlock).
+- **Danh bạ người nhận**: thêm bằng số tài khoản (tự lưu tên chủ tài khoản), xóa, chọn nhanh khi chuyển.
+- **Lệnh chuyển tiền định kỳ**: hằng ngày / tuần / tháng, có ngày bắt đầu và kết thúc, tạm dừng / tiếp tục / hủy,
+  tối đa 10 lệnh đang dùng mỗi khách. Nhân viên bấm **"Chạy các lệnh đến hạn"** (hệ thống thật chạy tự động mỗi ngày):
+  lệnh lỗi (thiếu tiền...) được ghi kết quả, báo cho khách và chờ kỳ sau; **không chạy bù** các kỳ đã qua;
+  lệnh "ngày 31 hằng tháng" vẫn giữ ngày 31 ở tháng đủ ngày.
+
+**Module 9 – Cấu hình** (quản trị viên)
+- Sửa **11 tham số hệ thống**, **biểu phí chuyển khoản theo bậc**, **lãi suất** tiết kiệm / vay (dùng ở đợt sau).
+- Có khoảng giá trị cho phép và kiểm tra chéo (hạn mức mỗi lần ≤ hạn mức mỗi ngày; mức tối thiểu ≤ hạn mức mỗi lần).
+- Thiếu tham số trong CSDL thì dùng giá trị mặc định; mọi thay đổi đều ghi nhật ký.
+
+| Tham số | Mặc định | Khoảng cho phép |
+|---|---|---|
+| Số lần nhập sai mật khẩu thì khóa | 5 | 3 – 10 |
+| Tuổi tối thiểu | 18 | 16 – 25 |
+| Số tài khoản tối đa mỗi khách | 5 | 1 – 20 |
+| Độ dài mật khẩu tối thiểu | 6 | 6 – 32 |
+| Hết phiên khi không thao tác (phút, 0 = tắt) | 10 | 0 – 120 |
+| Nạp / rút tại quầy mỗi lần | 500.000.000 | 1.000 – 1.000 tỷ |
+| Nạp / rút trên ứng dụng mỗi lần | 50.000.000 | như trên |
+| Chuyển khoản tối thiểu | 10.000 | như trên |
+| Chuyển khoản tối đa mỗi lần | 200.000.000 | như trên |
+| Chuyển khoản tối đa mỗi ngày (mỗi tài khoản) | 500.000.000 | như trên |
+| Ngưỡng bắt buộc OTP | 10.000.000 | như trên |
+
+Biểu phí chuyển khoản mặc định: đến 2.000.000 → **0 đ**; 2.000.001 – 100.000.000 → **3.300 đ**; trên 100.000.000 → **11.000 đ**.
+
+**Module 10 – Báo cáo, Nhật ký & Thông báo**
+- **Khách hàng:** *Thông báo* biến động số dư (mọi giao dịch, kể cả chuyển đến / chuyển đi / phí / đảo), kết quả KYC,
+  mở / đóng băng / đóng tài khoản, khóa đăng nhập, đặt lại mật khẩu, lệnh định kỳ thất bại.
+- **Giao dịch viên:** *Báo cáo giao dịch* theo ngày (≤ 366 ngày) hoặc theo tháng (≤ 5 năm), có tổng cộng và xuất CSV.
+- **Quản trị viên:** thêm *Tổng quan*, *Đối soát*, *Nhật ký*.
+  - **Đối soát** KHỚP khi tổng số dư các tài khoản = tổng (tiền vào − tiền ra) của sổ cái **và** không tài khoản nào
+    lệch so với số dư sau của giao dịch cuối cùng.
+  - **Nhật ký kiểm toán** ghi: đăng nhập (thành công / thất bại / khóa tự động), đổi / đặt lại mật khẩu, cấp đăng nhập,
+    tạo nhân viên, khóa / mở khóa, tạo / sửa hồ sơ, duyệt / từ chối KYC, ngừng / kích hoạt hồ sơ, mở / đóng băng / đóng tài khoản,
+    đảo giao dịch, đổi tham số / phí / lãi suất, tạo / đổi trạng thái / chạy lệnh định kỳ.
+
+**Module 1 – bổ sung:** OTP một lần cho chuyển khoản lớn (6 chữ số, hiệu lực 2 phút, sai 3 lần thì hủy, gắn với từng người dùng);
+**tự đăng xuất** khi không thao tác theo thời gian cấu hình.
+
+## 4. Phân quyền
+
+| Chức năng | Khách | Giao dịch viên | Admin |
+|---|:--:|:--:|:--:|
+| Hồ sơ của mình; tài khoản, nạp / rút ứng dụng, lịch sử, sao kê của mình | ✔ | | |
+| Chuyển khoản, danh bạ, lệnh định kỳ (của mình) | ✔ | | |
+| Thông báo của mình | ✔ | | |
+| Tạo / sửa hồ sơ khách; cấp đăng nhập; mở / đóng băng / đóng tài khoản | | ✔ | ✔ |
+| Nạp / rút tại quầy; tra cứu giao dịch toàn hệ thống; sao kê mọi tài khoản | | ✔ | ✔ |
+| Xem mọi lệnh định kỳ; **chạy lệnh đến hạn** | | ✔ | ✔ |
+| Báo cáo giao dịch theo ngày / tháng | | ✔ | ✔ |
+| Duyệt / từ chối KYC; ngừng / kích hoạt hồ sơ; đảo giao dịch | | | ✔ |
+| Tổng quan, đối soát, nhật ký | | | ✔ |
+| Cấu hình (tham số, phí, lãi suất) | | | ✔ |
+| Tạo nhân viên; khóa / mở khóa; đặt lại mật khẩu người dùng | | | ✔ |
+| Đổi mật khẩu của mình | ✔ | ✔ | ✔ |
+
+## 5. Cài đặt
+
+1. **CSDL:** mở `sql/QLNganHang.sql` trong SSMS rồi Execute.
+   ⚠ Script **xóa và tạo lại** CSDL `QLNganHang` (11 bảng). Bản đợt 1 đã cài trước đó sẽ mất dữ liệu; cần chạy lại script này
+   vì đợt 2 thêm bảng và cột (`PHI`, `MaNhom`, `ThamSo`, `BieuPhi`, `LaiSuat`, `NguoiThuHuong`, `LenhDinhKy`, `NhatKy`, `ThongBao`).
+2. **SQL Server:** bật *SQL Server and Windows Authentication*, bật login `sa`, bật TCP/IP cổng 1433, restart dịch vụ.
+3. **NetBeans:** *New Project → Java with Ant → Java Project with Existing Sources*, đặt tên `NganHangMini`, chọn thư mục `src`.
+4. **JDBC:** chép `mssql-jdbc-xx.jre11.jar` vào `lib`, chuột phải *Libraries → Add JAR/Folder*, tick *Relative Path*.
+5. Sửa mật khẩu `sa` trong `core/database/MyConnection.java`, chạy file đó (Shift+F6) → "Kết nối thành công!".
+6. *Project Properties → Run → Main Class* chọn `main.Main`, nhấn F6.
+
+**Tài khoản mẫu**
+
+| Tên đăng nhập | Mật khẩu | Vai trò | Ghi chú |
+|---|---|---|---|
+| `admin` | `admin123` | Quản trị viên | |
+| `gdv1` | `gdv123` | Giao dịch viên | |
+| `an` | `123456` | Khách hàng | 1000000001 (5.000.000), 1000000004 (1.000.000); danh bạ đã có Bình |
+| `binh` | `123456` | Khách hàng | 1000000002 (2.000.000) |
+| `cuong` | `123456` | Khách hàng | 1000000003 (10.000.000) |
+
+Khách hàng **Phạm Văn Dũng** đang *Chờ duyệt* KYC và chưa có đăng nhập, dùng để thử luồng duyệt.
+
+## 6. Kịch bản thử trên SQL Server
+
+Logic nghiệp vụ và phân quyền đã có kiểm thử tự động, nhưng các câu SQL cần chạy thử trên SQL Server thật. Nên làm theo thứ tự:
+
+1. **Dữ liệu cấu hình:** `SELECT COUNT(*) FROM ThamSo` → 11; `BieuPhi` → 3; `LaiSuat` → 8; `NguoiThuHuong` → 1.
+2. **Chuyển khoản nhỏ** (đăng nhập `an`): từ 1000000001 sang 1000000002 số tiền 50.000 → phí 0; số dư an giảm 50.000, binh tăng 50.000;
+   cả hai thấy dòng trong *Lịch sử* và có *Thông báo*.
+3. **Chuyển khoản có phí:** chuyển 3.000.000 → hộp xác nhận hiện phí 3.300; sổ cái có `CHUYEN_DI` 3.000.000 và `PHI` 3.300 (cột `MaNhom` trỏ về
+   dòng chuyển đi), bên nhận có `CHUYEN_DEN`. Sổ cái và số dư: `SoDuSau` của dòng `PHI` bằng số dư hiện tại.
+4. **OTP:** đăng nhập `gdv1` nạp quầy 5.000.000 cho `1000000003`; đăng nhập `cuong` chuyển 10.000.000 → hiện mã OTP; thử nhập sai (còn 2 lần),
+   nhập sai 3 lần (mã bị hủy, phải lấy mã mới), rồi nhập đúng.
+5. **Hạn mức ngày:** `admin` vào *Cấu hình*: đặt "Chuyển khoản tối đa mỗi lần" = 500.000, sau đó "mỗi ngày" = 1.000.000;
+   `an` chuyển 500.000 hai lần được, lần ba bị từ chối (báo còn được chuyển bao nhiêu). **Nhớ khôi phục** 200.000.000 / 500.000.000.
+6. **Danh bạ:** thêm, xóa, chọn từ danh bạ; tick "Lưu người nhận vào danh bạ" khi chuyển.
+7. **Lệnh định kỳ:** `an` tạo lệnh *hằng ngày* bắt đầu hôm nay; `gdv1` bấm *Chạy các lệnh đến hạn* → thành công, ngày chạy kế tiếp là ngày mai;
+   bấm lần nữa → 0 lệnh. Tạo một lệnh có số tiền lớn hơn số dư → chạy thất bại, `an` nhận thông báo.
+8. **Hết phiên:** đặt "Hết phiên" = 1 phút, đăng nhập lại, để yên 1 phút → tự về màn hình đăng nhập.
+9. **Nhật ký:** `admin` → *Báo cáo → Nhật ký*: thấy các thao tác ở trên (đăng nhập, đổi tham số, chạy lệnh...), không có mật khẩu / OTP.
+10. **Đối soát** (admin) → phải ra **KHỚP**. Báo cáo giao dịch theo ngày phải khớp với những gì vừa làm.
+
+Câu lệnh kiểm tra thêm (phải trả về 0 / 0 dòng):
+
+```sql
+-- tiền chuyển đi = tiền chuyển đến (phí không tính)
+SELECT SUM(CASE WHEN LoaiGD='CHUYEN_DI' THEN SoTien ELSE 0 END)
+     - SUM(CASE WHEN LoaiGD='CHUYEN_DEN' THEN SoTien ELSE 0 END) FROM GiaoDich;
+
+-- số dư mỗi tài khoản = số dư sau của giao dịch cuối trong sổ cái
+SELECT t.SoTaiKhoan, t.SoDu, g.SoDuSau FROM TaiKhoan t
+CROSS APPLY (SELECT TOP 1 SoDuSau FROM GiaoDich WHERE MaTK = t.MaTK ORDER BY MaGD DESC) g
+WHERE t.SoDu <> g.SoDuSau;
+```
+
+## 7. Giới hạn hiện tại và kế hoạch
+
+- OTP hiển thị ngay trên màn hình (bản học tập); hệ thống thật gửi qua SMS / ứng dụng xác thực.
+- Lệnh định kỳ chạy khi nhân viên bấm nút; hệ thống thật dùng tác vụ chạy tự động hằng ngày.
+- Phí chuyển khoản chưa được ghi nhận thành doanh thu ngân hàng (chỉ trừ vào tài khoản người gửi).
+- Băm SHA-256 kèm tên đăng nhập là mức cơ bản; hệ thống thật dùng BCrypt/Argon2 với muối ngẫu nhiên.
+- Mật khẩu tạm do admin đặt lại chưa bắt buộc đổi ở lần đăng nhập sau.
+- Chưa có chuyển khoản liên ngân hàng, chuyển khoản quầy cho khách, và đảo giao dịch chuyển khoản.
+
+| Đợt | Module còn lại |
+|---|---|
+| 3 | 6 Tiết kiệm (dùng lãi suất đã cấu hình) · 8 Thẻ |
+| 4 | 7 Khoản vay |
