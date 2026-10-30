@@ -1,0 +1,145 @@
+# NganHangMini v3 – đợt 1: phần lõi theo hướng module
+
+Phần mềm quản lý tài khoản ngân hàng (Java Swing + SQL Server), **chia theo module nghiệp vụ**,
+mỗi module là một ứng dụng MVC thu nhỏ (`model` / `dao` / `controller` / `view`).
+
+Đợt 1 gồm `core` dùng chung và 4 module nền tảng. Các module 5–10 (Chuyển khoản, Tiết kiệm,
+Khoản vay, Thẻ, Cấu hình, Báo cáo & Nhật ký) sẽ cắm thêm vào ở các đợt sau mà không phải sửa 4 module này.
+
+## 1. Bản đồ module
+
+| # | Module | Gói | Chức năng đợt 1 |
+|---|---|---|---|
+| 1 | **Xác thực & Phân quyền** | `module.xacthuc` | Đăng nhập (mật khẩu băm SHA-256), khóa sau 5 lần sai, 3 vai trò (Khách, Giao dịch viên, Admin), đổi mật khẩu, admin tạo nhân viên / khóa / đặt lại mật khẩu, nhân viên cấp đăng nhập cho khách |
+| 2 | **Khách hàng (KYC)** | `module.khachhang` | Tạo / sửa / tìm hồ sơ, kiểm tra tuổi ≥ 18, xác minh KYC (chờ duyệt → đã xác minh / từ chối), ngừng / kích hoạt hồ sơ (không xóa), khách tự cập nhật liên hệ |
+| 3 | **Tài khoản** | `module.taikhoan` | Mở tài khoản (khách đã KYC, tối đa 5 tài khoản), 1 khách nhiều tài khoản, đóng băng / mở băng, đóng tài khoản (chỉ khi số dư 0), tên gợi nhớ |
+| 4 | **Giao dịch & Sổ cái** | `module.giaodich` | Nạp / rút (tại quầy và trên ứng dụng), sổ cái bất biến có mã tham chiếu `GDxxxxxxxx`, đảo giao dịch, lịch sử có lọc, sao kê theo kỳ, xuất CSV |
+
+```
+src/
+├── core/                         dùng chung toàn hệ thống, KHÔNG phụ thuộc module nào
+│   ├── database/   MyConnection
+│   ├── util/       DinhDang, MatKhauUtil, CsvUtil
+│   ├── phien/      PhienDangNhap, VaiTro      (ai đang đăng nhập, vai trò gì)
+│   └── ui/         IModule, frmChinh, pnlNhieuTab, CoTheLamMoi, UI
+├── module/
+│   ├── xacthuc/    model/ dao/ controller/ view/   + XacThucModule
+│   ├── khachhang/  model/ dao/ controller/ view/   + KhachHangModule
+│   ├── taikhoan/   model/ dao/ controller/ view/   + TaiKhoanModule
+│   └── giaodich/   model/ dao/ controller/ view/   + GiaoDichModule
+└── main/           Main   (nơi DUY NHẤT biết tất cả các module)
+```
+
+Trong mỗi module luồng vẫn là `view → controller → dao → CSDL`; View không viết SQL, DAO không biết giao diện.
+
+## 2. Bốn luật giữa các module
+
+1. **Gọi sang module khác chỉ qua Controller** của module đó, không gọi DAO, không đọc bảng của module khác.
+   (Ví dụ: `TaiKhoanController` hỏi `KhachHangController` xem khách đã KYC chưa.)
+2. **Sổ cái là cổng duy nhất thay đổi tiền.** `GiaoDichDAO.ghiSo(...)` là nơi DUY NHẤT được sửa `TaiKhoan.SoDu`,
+   và cập nhật số dư + ghi sổ nằm trong cùng một giao dịch JDBC. Giao dịch đã ghi không sửa, không xóa;
+   sửa sai bằng cách ghi giao dịch đảo.
+3. **Kiểm tra dữ liệu người dùng nhập trước, rồi mới kiểm tra quyền / đọc CSDL.**
+4. **Phân quyền ở Controller**, không chỉ ở giao diện. Nút mờ trên View chỉ là tiện lợi; Controller vẫn
+   ném lỗi nếu gọi sai quyền. Khách hàng chỉ thao tác được trên tài khoản của chính mình.
+
+Thêm module mới: viết lớp cài `IModule` (3 hàm `ten`, `choPhep`, `taoManHinh`) rồi thêm vào danh sách
+`CAC_MODULE` trong `main/Main.java`. `frmChinh` tự lọc theo vai trò và tạo tab.
+
+## 3. Phân quyền
+
+| Chức năng | Khách | Giao dịch viên | Admin |
+|---|:--:|:--:|:--:|
+| Xem hồ sơ của mình, sửa SĐT / email / địa chỉ | ✔ | | |
+| Tạo, sửa hồ sơ khách hàng; tìm kiếm khách hàng | | ✔ | ✔ |
+| Duyệt / từ chối KYC; ngừng / kích hoạt hồ sơ | | | ✔ |
+| Cấp tài khoản đăng nhập cho khách (khách phải đã KYC) | | ✔ | ✔ |
+| Mở tài khoản, đóng băng / mở băng, đóng tài khoản | | ✔ | ✔ |
+| Xem tài khoản của mình, đổi tên gợi nhớ | ✔ | | |
+| Nạp / rút trên ứng dụng (tài khoản của mình) | ✔ | | |
+| Nạp / rút tại quầy (mọi tài khoản) | | ✔ | ✔ |
+| Lịch sử và sao kê của mình | ✔ | | |
+| Tra cứu giao dịch toàn hệ thống, sao kê mọi tài khoản | | ✔ | ✔ |
+| Đảo giao dịch | | | ✔ |
+| Đổi mật khẩu của mình | ✔ | ✔ | ✔ |
+| Tạo nhân viên, khóa / mở khóa, đặt lại mật khẩu người dùng | | | ✔ |
+
+## 4. Quy tắc nghiệp vụ (hằng số nằm đầu các controller)
+
+| Quy tắc | Giá trị |
+|---|---|
+| Tuổi tối thiểu của khách hàng | 18 |
+| CCCD / SĐT / email | 12 chữ số / 9–11 chữ số / đúng dạng email |
+| Số tài khoản tối đa mỗi khách (chưa đóng) | 5 |
+| Mở tài khoản / cấp đăng nhập | khách phải **đã xác minh KYC** và đang hoạt động |
+| Nạp / rút trên ứng dụng | > 0 và ≤ 50.000.000 VND mỗi lần |
+| Nạp / rút tại quầy | > 0 và ≤ 500.000.000 VND mỗi lần |
+| Giao dịch | chỉ trên tài khoản **đang hoạt động** (đóng băng / đã đóng thì từ chối) |
+| Nhập sai mật khẩu | 5 lần liên tiếp thì khóa (admin không bị khóa tự động) |
+| Mật khẩu | tối thiểu 6 ký tự |
+| Đóng tài khoản | chỉ khi số dư bằng 0 |
+| Đảo giao dịch | chỉ giao dịch nạp / rút, mỗi giao dịch 1 lần (chặn cả ở CSDL), bắt buộc có lý do |
+| Lịch sử / tra cứu | tối đa 500 giao dịch mới nhất; sao kê tối đa 1 năm |
+
+Đợt 2 (module Cấu hình) sẽ chuyển các hằng số này thành tham số trong CSDL.
+
+## 5. Cài đặt
+
+1. **CSDL:** mở `sql/QLNganHang.sql` trong SSMS rồi Execute.
+   ⚠ Script **xóa và tạo lại** CSDL `QLNganHang`. Bản v2 không dùng chung được với CSDL này
+   (đã tách bảng `NguoiDung` khỏi `TaiKhoan`), hãy dùng trọn bộ `src` mới.
+2. **SQL Server:** bật *SQL Server and Windows Authentication*, bật login `sa`, bật TCP/IP cổng 1433, restart dịch vụ.
+3. **NetBeans:** *File → New Project → Java with Ant → Java Project with Existing Sources*, đặt tên
+   `NganHangMini`, ở bước *Source Package Folders* chọn thư mục `src` của project này.
+4. **JDBC:** chép `mssql-jdbc-xx.jre11.jar` vào `lib`, chuột phải *Libraries → Add JAR/Folder*, tick *Relative Path*.
+5. Sửa mật khẩu `sa` trong `core/database/MyConnection.java`, chạy file đó (Shift+F6) → "Kết nối thành công!".
+6. *Project Properties → Run → Main Class* chọn `main.Main`, nhấn F6.
+
+**Tài khoản mẫu**
+
+| Tên đăng nhập | Mật khẩu | Vai trò | Ghi chú |
+|---|---|---|---|
+| `admin` | `admin123` | Quản trị viên | |
+| `gdv1` | `gdv123` | Giao dịch viên | |
+| `an` | `123456` | Khách hàng | 2 tài khoản: 1000000001 (5.000.000), 1000000004 (1.000.000) |
+| `binh` | `123456` | Khách hàng | 1000000002 (2.000.000) |
+| `cuong` | `123456` | Khách hàng | 1000000003 (10.000.000) |
+
+Khách hàng **Phạm Văn Dũng** đang ở trạng thái *Chờ duyệt* KYC và chưa có đăng nhập, dùng để thử luồng duyệt.
+
+## 6. Kịch bản thử trên SQL Server
+
+Phần logic nghiệp vụ và phân quyền đã có kiểm thử tự động, nhưng các câu SQL cần chạy thử trên SQL Server thật.
+Nên làm theo thứ tự:
+
+1. **Đăng nhập:** thử cả 5 tài khoản; thử `cuong` sai mật khẩu 5 lần → bị khóa; đăng nhập `admin` →
+   *Bảo mật → Người dùng* → mở khóa `cuong`.
+2. **Luồng khách hàng mới** (đăng nhập `gdv1`): *Khách hàng → Tạo hồ sơ* → thử *Mở tài khoản* cho CCCD đó
+   (phải bị từ chối vì chưa KYC) → đăng nhập `admin` duyệt KYC → `gdv1` *Cấp tài khoản đăng nhập* →
+   *Tài khoản → Mở tài khoản mới* → *Giao dịch → Nạp tại quầy* 1.000.000.
+3. **Khách hàng** (đăng nhập `an`): chỉ thấy 2 tài khoản của mình; nạp, rút; rút quá số dư; thử số tiền > 50.000.000.
+4. **Sao kê:** kiểm tra *số dư đầu kỳ + tổng vào − tổng ra = số dư cuối kỳ*; xuất CSV mở bằng Excel.
+5. **Đảo giao dịch** (admin): đảo một giao dịch nạp; đảo lần hai phải bị chặn; đảo nạp khi số dư không đủ phải bị từ chối.
+6. **Đóng băng:** đóng băng một tài khoản → nạp / rút bị từ chối; thử đóng tài khoản còn số dư → bị từ chối.
+
+Câu lệnh đối soát (phải trả về **0 dòng**: số dư mỗi tài khoản luôn bằng số dư sau của giao dịch cuối trong sổ cái):
+
+```sql
+SELECT t.SoTaiKhoan, t.SoDu, g.SoDuSau
+FROM TaiKhoan t
+CROSS APPLY (SELECT TOP 1 SoDuSau FROM GiaoDich WHERE MaTK = t.MaTK ORDER BY MaGD DESC) g
+WHERE t.SoDu <> g.SoDuSau;
+```
+
+## 7. Giới hạn của đợt 1 và các đợt sau
+
+- Số dư ở bảng `TaiKhoan` chỉ đúng khi mọi thay đổi đi qua sổ cái; module 10 (đợt 2) sẽ tự động hóa việc đối soát.
+- Băm SHA-256 kèm tên đăng nhập là mức cơ bản; hệ thống thật dùng BCrypt/Argon2 với muối ngẫu nhiên.
+- Mật khẩu tạm do admin đặt lại chưa bắt buộc đổi ở lần đăng nhập sau; chưa có hết phiên khi không thao tác và chưa có OTP.
+- Chưa có nhật ký kiểm toán (ai làm gì, lúc nào): hiện chỉ cột `MaND` trong sổ cái ghi người thực hiện.
+
+| Đợt | Module |
+|---|---|
+| 2 | 5 Chuyển khoản · 9 Cấu hình · 10 Báo cáo, Nhật ký & Thông báo |
+| 3 | 6 Tiết kiệm · 8 Thẻ |
+| 4 | 7 Khoản vay |
